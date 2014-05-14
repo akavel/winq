@@ -1,3 +1,16 @@
+/*
+Package winq provides functions for quick & dirty WinAPI calls, with easy errors capturing.
+
+Sample usage:
+
+	var try winq.Try
+	r := try.N("MessageBox", 0, syscall.StringToUTF16Ptr(msg), syscall.StringToUTF16Ptr(title), 0)
+	if try.Err != nil {
+		panic(try.Err.Error())
+	}
+	println("got:", r)
+
+*/
 package winq
 
 import (
@@ -8,7 +21,7 @@ import (
 
 var (
 	procs = map[string]*syscall.Proc{}
-	mods  = []*syscall.DLL{
+	Dlls  = []*syscall.DLL{
 		syscall.MustLoadDLL("kernel32.dll"),
 		syscall.MustLoadDLL("user32.dll"),
 		syscall.MustLoadDLL("gdi32.dll"),
@@ -24,33 +37,75 @@ type Error struct {
 func (e Error) Error() string { return e.Msg + ": " + e.Original.Error() }
 
 type Try struct {
-	Failed bool
-	Err    error
+	Err error
 }
 
-func (t *Try) F(proc string, args ...interface{}) (r uintptr, lastErr error) {
-	if t.Failed {
+/*
+Function F tries to call a WinAPI procedure with given name with specified args.
+A common set of DLLs is searched (as listed in Dlls package variable) for a
+function with given name, or name + "W". A call is then made with specified arguments,
+which must be convertible to uintptr (allowed are: all ints, uints, pointers, bool, nil).
+The return value is stored in r, and result of GetLastError call is stored in lastErr.
+
+As WinAPI functions tend to signal error in the returned value, a convenient set of
+wrappers is provided as shortcuts for common cases:
+
+	try.N(name, args) - when Nonzero result means success
+	try.Z(name, args) - when Zero result means success
+	try.A(name, args) - when Any result means success
+	try.X(isok, name, args) - for more complex cases, isok condition is used to detect success
+
+Function F (and the wrappers) panic if they can't find the procedure by given name,
+or cannot convert some of the arguments to uintptr.
+
+The functions DON'T DO ANYTHING at all if any previous call with the same Try object
+has failed (and thus t.Err is non-nil). This results in the following patterns:
+
+	// You can chain multiple calls, and they'll do nothing after first failure
+	a := try.N("Foo")
+	b := try.N("Bar", a)
+	try.N("Baz", b)
+	if try.Err != nil {
+		return try.Err
+	}
+
+
+	// For some functions, like EndPaint, you always want to call them
+	dc := try.N("BeginPaint", hwnd, &paintstruct)
+	if try.Err != nil {
+		return try.Err
+	}
+	defer (&winq.Try{}).N("EndPaint", hwnd, &paintstruct)
+
+
+IMPORTANT CAVEAT: F has package-level cache, mapping function names to their DLL
+addresses; you MUST NOT call it from different threads/goroutines! The library is
+intended as fairly Quick And Dirty; this particular behavior may get improved in future,
+but no promises for now.
+*/
+func (t *Try) F(name string, args ...interface{}) (r uintptr, lastErr error) {
+	if t.Err != nil {
 		return
 	}
 
 	//FIXME: no synchronization!
-	p := procs[proc]
+	p := procs[name]
 	if p != nil {
 		goto found
 	}
-	for _, m := range mods {
-		for _, fullproc := range []string{proc, proc + "W"} {
+	for _, m := range Dlls {
+		for _, fullname := range []string{name, name + "W"} {
 			var err error
-			p, err = m.FindProc(fullproc)
+			p, err = m.FindProc(fullname)
 			if err != nil {
 				continue
 			}
-			procs[proc] = p
+			procs[name] = p
 			goto found
 		}
 	}
 	//FIXME: for now, fail hard, but "in future" do something safer
-	panic("WinAPI procedure '" + proc + "' not found in predefined DLLs")
+	panic("WinAPI procedure '" + name + "' not found in predefined DLLs")
 
 found:
 	raws := make([]uintptr, len(args))
@@ -70,7 +125,7 @@ found:
 		case reflect.Invalid:
 			raws[i] = uintptr(0)
 		default:
-			panic("unknown kind " + v.Kind().String() + " in argument #" + string([]byte{'0' + byte(i)}) + " to " + proc)
+			panic("unknown kind " + v.Kind().String() + " in argument #" + string([]byte{'0' + byte(i)}) + " to " + name)
 		}
 	}
 
@@ -78,41 +133,46 @@ found:
 	return r1, lastErr
 }
 
-func (t *Try) Failf(orig error, format string, args ...interface{}) {
-	if t.Failed {
+func (t *Try) failf(orig error, format string, args ...interface{}) {
+	if t.Err != nil {
 		return
 	}
-	t.Failed = true
 	t.Err = Error{orig, fmt.Sprintf(format, args...)}
 }
 
-// N calls F, and checks if result is nonzero, otherwise remembers lastErr.
-func (t *Try) N(proc string, args ...interface{}) uintptr {
-	r, err := t.F(proc, args...)
+// Function N calls WinAPI procedure, and treats nonzero result as success.
+// Otherwise, error information is stored in t.Err. For details, see function F.
+func (t *Try) N(name string, args ...interface{}) uintptr {
+	r, err := t.F(name, args...)
 	if r == 0 {
-		t.Failf(err, "%s", proc)
+		t.failf(err, "%s", name)
 	}
 	return r
 }
 
-// Z calls F, and checks if result is zero, otherwise remembers lastErr.
-func (t *Try) Z(proc string, args ...interface{}) uintptr {
-	r, err := t.F(proc, args...)
+// Function Z calls WinAPI procedure, and treats zero result as success.
+// Otherwise, error information is stored in t.Err. For details, see function F.
+func (t *Try) Z(name string, args ...interface{}) uintptr {
+	r, err := t.F(name, args...)
 	if r != 0 {
-		t.Failf(err, "%s", proc)
+		t.failf(err, "%s", name)
 	}
 	return r
 }
 
-func (t *Try) A(proc string, args ...interface{}) uintptr {
-	r, _ := t.F(proc, args...)
+// Function A calls WinAPI procedure, and treats all results as success.
+// For details, see function F.
+func (t *Try) A(name string, args ...interface{}) uintptr {
+	r, _ := t.F(name, args...)
 	return r
 }
 
-func (t *Try) X(isok func(r uintptr) bool, proc string, args ...interface{}) uintptr {
-	r, err := t.F(proc, args...)
+// Function X calls WinAPI procedure, and assumes success if isok returns true for result.
+// Otherwise, error information is stored in t.Err. For details, see function F.
+func (t *Try) X(isok func(r uintptr) bool, name string, args ...interface{}) uintptr {
+	r, err := t.F(name, args...)
 	if !isok(r) {
-		t.Failf(err, "%s", proc)
+		t.failf(err, "%s", name)
 	}
 	return r
 }
