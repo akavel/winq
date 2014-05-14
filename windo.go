@@ -81,3 +81,15 @@ func (t *Try) DispatchMessage(msg *win.MSG) uint32 {
 		uintptr(unsafe.Pointer(msg)),
 	))
 }
+
+func (t *Try) DestroyWindow(hwnd win.HANDLE) {
+	t.User32nonzero("DestroyWindow",
+		uintptr(hwnd),
+	)
+}
+
+func (t *Try) PostQuitMessage(exitcode uint32) {
+	t.User32any("PostQuitMessage",
+		uintptr(exitcode),
+	)
+}
