@@ -10,6 +10,7 @@ Sample usage:
 	}
 	println("got:", r)
 
+For more details, see description of function Try.F.
 */
 package winq
 
@@ -70,7 +71,7 @@ has failed (and thus t.Err is non-nil). This results in the following patterns:
 	}
 
 
-	// For some functions, like EndPaint, you always want to call them
+	// For some functions, like EndPaint, you always want them to get called
 	dc := try.N("BeginPaint", hwnd, &paintstruct)
 	if try.Err != nil {
 		return try.Err
