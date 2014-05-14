@@ -1,12 +1,19 @@
-package windo
+package winq
 
 import (
 	"fmt"
+	"reflect"
 	"syscall"
 )
 
-var modCache = map[string]*syscall.DLL{}
-var procCache = map[string]*syscall.Proc{}
+var (
+	procs = map[string]*syscall.Proc{}
+	mods  = []*syscall.DLL{
+		syscall.MustLoadDLL("kernel32.dll"),
+		syscall.MustLoadDLL("user32.dll"),
+		syscall.MustLoadDLL("gdi32.dll"),
+	}
+)
 
 type Error struct {
 	Original error
@@ -21,6 +28,56 @@ type Try struct {
 	Err    error
 }
 
+func (t *Try) F(proc string, args ...interface{}) (r uintptr, lastErr error) {
+	if t.Failed {
+		return
+	}
+
+	//FIXME: no synchronization!
+	p := procs[proc]
+	if p != nil {
+		goto found
+	}
+	for _, m := range mods {
+		for _, fullproc := range []string{proc, proc + "W"} {
+			var err error
+			p, err = m.FindProc(fullproc)
+			if err != nil {
+				continue
+			}
+			procs[proc] = p
+			goto found
+		}
+	}
+	//FIXME: for now, fail hard, but "in future" do something safer
+	panic("WinAPI procedure '" + proc + "' not found in predefined DLLs")
+
+found:
+	raws := make([]uintptr, len(args))
+	for i, arg := range args {
+		v := reflect.ValueOf(arg)
+		switch v.Kind() {
+		case reflect.Ptr:
+			raws[i] = v.Pointer()
+		case reflect.Uint, reflect.Uintptr, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			raws[i] = uintptr(v.Uint())
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			raws[i] = uintptr(v.Int())
+		case reflect.Bool:
+			if v.Bool() {
+				raws[i] = uintptr(1)
+			}
+		case reflect.Invalid:
+			raws[i] = uintptr(0)
+		default:
+			panic("unknown kind " + v.Kind().String() + " in argument #" + string([]byte{'0' + byte(i)}) + " to " + proc)
+		}
+	}
+
+	r1, _, lastErr := p.Call(raws...)
+	return r1, lastErr
+}
+
 func (t *Try) Failf(orig error, format string, args ...interface{}) {
 	if t.Failed {
 		return
@@ -29,56 +86,32 @@ func (t *Try) Failf(orig error, format string, args ...interface{}) {
 	t.Err = Error{orig, fmt.Sprintf(format, args...)}
 }
 
-func (t *Try) Kernel32(proc string, args ...uintptr) (uintptr, error) {
-	return t.Call("kernel32.dll", proc, args...)
-}
-func (t *Try) User32(proc string, args ...uintptr) (uintptr, error) {
-	return t.Call("user32.dll", proc, args...)
-}
-
-func (t *Try) Kernel32nonzero(proc string, args ...uintptr) uintptr {
-	return t.CallNonzero("kernel32.dll", proc, args...)
-}
-func (t *Try) User32nonzero(proc string, args ...uintptr) uintptr {
-	return t.CallNonzero("user32.dll", proc, args...)
-}
-
-func (t *Try) User32any(proc string, args ...uintptr) uintptr {
-	r, _ := t.User32(proc, args...)
+// N calls F, and checks if result is nonzero, otherwise remembers lastErr.
+func (t *Try) N(proc string, args ...interface{}) uintptr {
+	r, err := t.F(proc, args...)
+	if r == 0 {
+		t.Failf(err, "%s", proc)
+	}
 	return r
 }
 
-func (t *Try) Call(dll, proc string, args ...uintptr) (uintptr, error) {
-	if t.Failed {
-		return 0, t.Err
+// Z calls F, and checks if result is zero, otherwise remembers lastErr.
+func (t *Try) Z(proc string, args ...interface{}) uintptr {
+	r, err := t.F(proc, args...)
+	if r != 0 {
+		t.Failf(err, "%s", proc)
 	}
-
-	p := procCache[proc]
-	if p == nil {
-		m := modCache[dll]
-		if m == nil {
-			m, t.Err = syscall.LoadDLL(dll)
-			if t.Err != nil {
-				t.Failf(t.Err, "LoadDLL(%s)", dll)
-				return 0, t.Err
-			}
-			modCache[dll] = m
-		}
-		p, t.Err = m.FindProc(proc)
-		if t.Err != nil {
-			t.Failf(t.Err, "FindProc(%s, %s)", dll, proc)
-			return 0, t.Err
-		}
-		procCache[proc] = p
-	}
-
-	r, _, err := p.Call(args...)
-	return r, err
+	return r
 }
 
-func (t *Try) CallNonzero(dll, proc string, args ...uintptr) uintptr {
-	r, err := t.Call(dll, proc, args...)
-	if r == 0 {
+func (t *Try) A(proc string, args ...interface{}) uintptr {
+	r, _ := t.F(proc, args...)
+	return r
+}
+
+func (t *Try) X(isok func(r uintptr) bool, proc string, args ...interface{}) uintptr {
+	r, err := t.F(proc, args...)
+	if !isok(r) {
 		t.Failf(err, "%s", proc)
 	}
 	return r
