@@ -71,12 +71,14 @@ has failed (and thus t.Err is non-nil). This results in the following patterns:
 	}
 
 
-	// For some functions, like EndPaint, you always want them to get called
+	// For some functions, like EndPaint, you want them to get called even if something fails later
 	dc := try.N("BeginPaint", hwnd, &paintstruct)
+	defer try.Detach().N("EndPaint", hwnd, &paintstruct)
+	memdc := try.N("CreateCompatibleDC", dc) // if this fails, above EndPaint will still run
+	defer try.Detach().N("DeleteDC", memdc)
 	if try.Err != nil {
 		return try.Err
 	}
-	defer (&winq.Try{}).N("EndPaint", hwnd, &paintstruct)
 
 
 IMPORTANT CAVEAT: F has package-level cache, mapping function names to their DLL
@@ -177,3 +179,25 @@ func (t *Try) X(isok func(r uintptr) bool, name string, args ...interface{}) uin
 	}
 	return r
 }
+
+type Tryer interface {
+	N(name string, args ...interface{}) uintptr
+	Z(name string, args ...interface{}) uintptr
+	A(name string, args ...interface{}) uintptr
+	X(isok func(r uintptr) bool, name string, args ...interface{}) uintptr
+}
+
+func (t *Try) Detach() Tryer {
+	if t.Err != nil {
+		return nop{}
+	} else {
+		return &Try{}
+	}
+}
+
+type nop struct{}
+
+func (nop) N(name string, args ...interface{}) uintptr                            { return 0 }
+func (nop) Z(name string, args ...interface{}) uintptr                            { return 0 }
+func (nop) A(name string, args ...interface{}) uintptr                            { return 0 }
+func (nop) X(isok func(r uintptr) bool, name string, args ...interface{}) uintptr { return 0 }
