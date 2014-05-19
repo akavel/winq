@@ -27,6 +27,7 @@ var (
 		syscall.MustLoadDLL("user32.dll"),
 		syscall.MustLoadDLL("gdi32.dll"),
 	}
+	mutex = RWMutex{}
 )
 
 type Error struct {
@@ -80,30 +81,28 @@ has failed (and thus t.Err is non-nil). This results in the following patterns:
 		return try.Err
 	}
 
-
-IMPORTANT CAVEAT: F has package-level cache, mapping function names to their DLL
-addresses; you MUST NOT call it from different threads/goroutines! The library is
-intended as fairly Quick And Dirty; this particular behavior may get improved in future,
-but no promises for now.
 */
 func (t *Try) F(name string, args ...interface{}) (r uintptr, lastErr error) {
 	if t.Err != nil {
 		return
 	}
 
-	//FIXME: no synchronization!
+	mutex.RLock()
 	p := procs[name]
+	mutex.RUnlock()
 	if p != nil {
 		goto found
 	}
 	for _, m := range Dlls {
-		for _, fullname := range []string{name, name + "W"} {
+		for _, fullname := range []string{name + "W", name} {
 			var err error
 			p, err = m.FindProc(fullname)
 			if err != nil {
 				continue
 			}
+			mutex.Lock()
 			procs[name] = p
+			mutex.Unlock()
 			goto found
 		}
 	}
