@@ -26,6 +26,7 @@ var (
 	Dlls  = []*syscall.DLL{
 		syscall.MustLoadDLL("kernel32.dll"),
 		syscall.MustLoadDLL("user32.dll"),
+		syscall.MustLoadDLL("comdlg32.dll"),
 		syscall.MustLoadDLL("gdi32.dll"),
 	}
 	mutex = sync.RWMutex{}
