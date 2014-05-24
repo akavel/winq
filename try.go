@@ -17,6 +17,7 @@ package winq
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"syscall"
 )
 
@@ -27,7 +28,7 @@ var (
 		syscall.MustLoadDLL("user32.dll"),
 		syscall.MustLoadDLL("gdi32.dll"),
 	}
-	mutex = RWMutex{}
+	mutex = sync.RWMutex{}
 )
 
 type Error struct {
