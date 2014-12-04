@@ -15,7 +15,6 @@ For more details, see description of function Try.F.
 package winq
 
 import (
-	"fmt"
 	"reflect"
 	"sync"
 	"syscall"
@@ -137,11 +136,11 @@ found:
 	return r1, lastErr
 }
 
-func (t *Try) failf(orig error, format string, args ...interface{}) {
+func (t *Try) failf(orig error, prefix string) {
 	if t.Err != nil {
 		return
 	}
-	t.Err = Error{orig, fmt.Sprintf(format, args...)}
+	t.Err = Error{orig, prefix}
 }
 
 // Function N calls WinAPI procedure, and treats nonzero result as success.
@@ -149,7 +148,7 @@ func (t *Try) failf(orig error, format string, args ...interface{}) {
 func (t *Try) N(name string, args ...interface{}) uintptr {
 	r, err := t.F(name, args...)
 	if r == 0 {
-		t.failf(err, "%s", name)
+		t.failf(err, name)
 	}
 	return r
 }
@@ -159,7 +158,7 @@ func (t *Try) N(name string, args ...interface{}) uintptr {
 func (t *Try) Z(name string, args ...interface{}) uintptr {
 	r, err := t.F(name, args...)
 	if r != 0 {
-		t.failf(err, "%s", name)
+		t.failf(err, name)
 	}
 	return r
 }
@@ -176,7 +175,7 @@ func (t *Try) A(name string, args ...interface{}) uintptr {
 func (t *Try) X(isok func(r uintptr) bool, name string, args ...interface{}) uintptr {
 	r, err := t.F(name, args...)
 	if !isok(r) {
-		t.failf(err, "%s", name)
+		t.failf(err, name)
 	}
 	return r
 }
